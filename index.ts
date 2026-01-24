@@ -8,7 +8,7 @@ import {
   HttpClient,
 } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
-import { LanguageModel, Tool, Toolkit, McpSchema } from "@effect/ai";
+import { Chat, LanguageModel, Tool, Toolkit, McpSchema } from "@effect/ai";
 import {
   OpenRouterLanguageModel,
   OpenRouterClient,
@@ -86,19 +86,45 @@ const toolHandlersLayer = toolkit
   .pipe(Layer.provide(FetchHttpClient.layer));
 
 const disasterAgent = (userQuery: string) =>
-  LanguageModel.generateText({
-    prompt: `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
+  Effect.scoped(
+    Effect.gen(function* () {
+      const chat = yield* Chat.empty;
+      const maxTurns = 6;
+      const initialPrompt = `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
 
 - Here's the latest megathread: https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread
 - If this links to more up to date mega thread, follow that and so on. Crawl through the subreddit as needed.
 
-You must provide the most helpful possible response to the user based on the information you can find. Search as long as needed,
-summaraize the response which can fit into a SMS message or two.
+VERY IMPORTANT: You MUST provide the most helpful possible response to the user based on the information you can find. Search as long as needed,
+summaraize the response which can fit into a SMS message or two. Condense the information as much as possible. Do not include any additional metadata.
+Do not include information you are inferring, only focus on the information available in the subreddit. Do not include text like "Based on the megathread checked".
+Do not even bother citing its from the megathread, the user knowns this. Focus on CRITICAL emergency information. The user has no internet access, so
+do not request additional links from them.
 
-User query: ${userQuery}`,
+User query: ${userQuery}`;
 
-    toolkit,
-  }).pipe(Effect.catchAll(() => Effect.dieMessage("Agent error occurred")));
+      let turn = 1;
+      let response = yield* chat.generateText({
+        prompt: initialPrompt,
+        toolkit,
+      });
+
+      while (response.finishReason === "tool-calls" && turn < maxTurns) {
+        turn += 1;
+        response = yield* chat.generateText({
+          prompt:
+            "Continue and respond directly to the user with the final SMS-ready answer.",
+          toolkit,
+        });
+      }
+
+      if (response.finishReason === "tool-calls" && turn >= maxTurns) {
+        yield* Effect.logWarning("Tool-call loop hit max turns");
+      }
+
+      return response;
+    }),
+  ).pipe(Effect.catchAll(() => Effect.dieMessage("Agent error occurred")));
 
 const WebhookHandler = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
@@ -143,7 +169,7 @@ const openRouterClientLayer = OpenRouterClient.layerConfig({
 
 // Layer: OpenRouterLanguageModel depends on OpenRouterClient
 const openRouterLanguageModelLayer = OpenRouterLanguageModel.layer({
-  model: "anthropic/claude-4.5-sonnet",
+  model: "openai/gpt-5.2",
 }).pipe(Layer.provide(openRouterClientLayer));
 
 // Combined layer for the webhook handler
