@@ -8,7 +8,6 @@ import {
   HttpClientRequest,
   HttpClient,
 } from "@effect/platform";
-import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { Chat, Tool, Toolkit } from "@effect/ai";
 import {
   OpenRouterLanguageModel,
@@ -159,21 +158,10 @@ const appLayer = Layer.mergeAll(
 );
 
 // Provide dependencies to webhook handler for Bun export
-const WebhookHandlerWithDeps = WebhookHandler.pipe(Effect.provide(appLayer));
+export const WebhookHandlerWithDeps = WebhookHandler.pipe(
+  Effect.provide(appLayer),
+);
 const handler = HttpApp.toWebHandler(WebhookHandlerWithDeps);
 
 export default handler;
 export { handler };
-
-if (import.meta.main) {
-  // Server layer for standalone execution
-  const serverLayer = HttpServer.serve(WebhookHandlerWithDeps).pipe(
-    Layer.provide(BunHttpServer.layer({ port: 3000 })),
-  );
-
-  BunRuntime.runMain(
-    Effect.logInfo("Server started on port 3000").pipe(
-      Effect.flatMap(() => Layer.launch(serverLayer)),
-    ),
-  );
-}
