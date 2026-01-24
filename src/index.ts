@@ -12,8 +12,6 @@ import {
   HttpServerResponse,
   HttpApp,
   FetchHttpClient,
-  HttpClientRequest,
-  HttpClient,
 } from "@effect/platform";
 import { Chat, Tool, Toolkit } from "@effect/ai";
 import {
@@ -21,6 +19,7 @@ import {
   OpenRouterClient,
 } from "@effect/ai-openrouter";
 import { RedditService } from "./services/RedditService";
+import { SmsSender } from "./services/SmsSender";
 
 const WebhookPayload = Schema.Struct({ query: Schema.String });
 
@@ -104,17 +103,17 @@ const WebhookHandler = Effect.gen(function* () {
 
   const request = yield* HttpServerRequest.HttpServerRequest;
   const webhookSecret = yield* Config.redacted("WEBHOOK_SECRET");
-  const responseUrl = yield* Config.url("SMS_RESPONSE_URL");
-
-  if (request.method !== "POST") {
-    return yield* HttpServerResponse.text("Method not allowed", {
-      status: 405,
-    });
-  }
+  const smsSender = yield* SmsSender;
 
   if (!request.url.includes(Redacted.value(webhookSecret))) {
     return yield* HttpServerResponse.text("Unauthorized", {
       status: 401,
+    });
+  }
+
+  if (request.method !== "POST") {
+    return yield* HttpServerResponse.text("Method not allowed", {
+      status: 405,
     });
   }
 
@@ -137,12 +136,7 @@ const WebhookHandler = Effect.gen(function* () {
   yield* Effect.logInfo(`Agent completed`);
 
   // TODO: need to break down into multiple messages
-  yield* HttpClientRequest.make("GET")(responseUrl).pipe(
-    HttpClientRequest.appendUrlParam("value1", response.text),
-    HttpClient.execute,
-  );
-
-  yield* Effect.logInfo("Response SMS sent");
+  yield* smsSender.send(response.text);
 
   return yield* HttpServerResponse.text(`Response: ${response.text}`);
 }).pipe(Effect.tapErrorCause(Effect.logError));
@@ -161,6 +155,7 @@ const openRouterLanguageModelLayer = OpenRouterLanguageModel.layer({
 const appLayer = Layer.mergeAll(
   toolHandlersLayer,
   openRouterLanguageModelLayer,
+  SmsSender.Default,
   FetchHttpClient.layer,
 );
 
