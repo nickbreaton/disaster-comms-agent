@@ -1,17 +1,19 @@
-import { Effect, Schema, Layer, Config } from "effect";
+import { Effect, Schema, Layer, Config, Option } from "effect";
 import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
   HttpApp,
   FetchHttpClient,
+  HttpClient,
 } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
-import { LanguageModel, Tool, Toolkit } from "@effect/ai";
+import { LanguageModel, Tool, Toolkit, McpSchema } from "@effect/ai";
 import {
   OpenRouterLanguageModel,
   OpenRouterClient,
 } from "@effect/ai-openrouter";
+import { RedditResponse } from "./src/schema/reddit";
 
 const PhoneNumber = Schema.String.pipe(Schema.brand("PhoneNumber"));
 const WebhookPayload = Schema.Struct({
@@ -19,44 +21,84 @@ const WebhookPayload = Schema.Struct({
   query: Schema.String,
 });
 
-const SearchMegathread = Tool.make("search_megathread", {
-  description:
-    "Search r/asheville subreddit megathreads for disaster-related information",
+const GetRedditPostBody = Tool.make("get_reddit_post_body", {
+  description: "Get the contents of a reddit post without comments",
   parameters: {
-    query: Schema.String.annotations({
-      description: "Search query for finding relevant posts",
+    url: Schema.String.annotations({
+      description:
+        "Full URL of the reddit post (i.e. https://www.reddit.com/r/{{subreddit}}/)",
     }),
   },
   success: Schema.String,
 });
 
-const SummarizeForSMS = Tool.make("summarize_for_sms", {
-  description:
-    "Summarize findings into SMS-friendly format (max 160 chars, urgent actionable info only)",
-  parameters: {
-    findings: Schema.String.annotations({
-      description: "Findings to summarize",
-    }),
-  },
-  success: Schema.String,
-});
+const toolkit = Toolkit.make(GetRedditPostBody);
+const toolHandlersLayer = toolkit
+  .toLayer(
+    Effect.gen(function* () {
+      const http = yield* HttpClient.HttpClient;
+      // const response = yield* http.get(url);
+      // return response.body;
 
-const toolkit = Toolkit.make(SearchMegathread, SummarizeForSMS);
-const toolHandlersLayer = toolkit.toLayer({
-  SearchMegathread: () => Effect.succeed("[]"),
-  SummarizeForSMS: () => Effect.succeed("No summary"),
-});
+      return toolkit.of({
+        get_reddit_post_body: ({ url }) =>
+          Effect.gen(function* () {
+            yield* Effect.logInfo("Toolcall: get_reddit_post_body").pipe(
+              Effect.annotateLogs({ url }),
+            );
+
+            if (!url.endsWith(".json")) {
+              url += "/.json";
+            }
+
+            const res = yield* http.get(url, {
+              acceptJson: true,
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+              },
+            });
+            const json = yield* res.json;
+            const decoded = yield* Schema.decodeUnknown(RedditResponse)(json);
+
+            const postText = yield* Option.fromNullable(
+              (() => {
+                for (const child of decoded) {
+                  for (const grandchild of child.data?.children ?? []) {
+                    if (grandchild.kind === "t3") {
+                      return grandchild.data?.selftext;
+                    }
+                  }
+                }
+              })(),
+            );
+
+            const selfText = yield* Option.fromNullable(postText);
+
+            return selfText;
+          }).pipe(
+            Effect.tapError((error) => Effect.log(error.message)),
+            Effect.orElse(() => Effect.succeed("Failed to get reddit post")),
+          ),
+      });
+    }),
+  )
+  .pipe(Layer.provide(FetchHttpClient.layer));
 
 const disasterAgent = (userQuery: string) =>
   LanguageModel.generateText({
     prompt: `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
 
+- Here's the latest megathread: https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread
+- If this links to more up to date mega thread, follow that and so on. Crawl through the subreddit as needed.
+
+You must provide the most helpful possible response to the user based on the information you can find. Search as long as needed,
+summaraize the response which can fit into a SMS message or two.
+
 User query: ${userQuery}`,
+
     toolkit,
-  }).pipe(
-    Effect.map((r) => r.text),
-    Effect.catchAll(() => Effect.dieMessage("Agent error occurred")),
-  );
+  }).pipe(Effect.catchAll(() => Effect.dieMessage("Agent error occurred")));
 
 const WebhookHandler = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
@@ -85,9 +127,13 @@ const WebhookHandler = Effect.gen(function* () {
 
   const response = yield* disasterAgent(decoded.query);
 
-  yield* Effect.logInfo(`Agent completed`);
+  yield* Effect.logInfo(
+    `Agent completed`,
+    response.finishReason,
+    response.text,
+  );
 
-  return yield* HttpServerResponse.text(`Response: ${response}`);
+  return yield* HttpServerResponse.text(`Response: ${response.text}`);
 });
 
 // Layer: OpenRouterClient depends on HttpClient and gets API key from Config
@@ -113,12 +159,12 @@ const handler = HttpApp.toWebHandler(WebhookHandlerWithDeps);
 export default handler;
 export { handler };
 
-// Server layer for standalone execution
-const serverLayer = HttpServer.serve(WebhookHandlerWithDeps).pipe(
-  Layer.provide(BunHttpServer.layer({ port: 3000 })),
-);
-
 if (import.meta.main) {
+  // Server layer for standalone execution
+  const serverLayer = HttpServer.serve(WebhookHandlerWithDeps).pipe(
+    Layer.provide(BunHttpServer.layer({ port: 3000 })),
+  );
+
   BunRuntime.runMain(
     Effect.logInfo("Server started on port 3000").pipe(
       Effect.flatMap(() => Layer.launch(serverLayer)),
