@@ -1,10 +1,12 @@
-import { Effect, Schema, Layer, Config } from "effect";
+import { Effect, Schema, Layer, Config, Redacted } from "effect";
 import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
   HttpApp,
   FetchHttpClient,
+  HttpClientRequest,
+  HttpClient,
 } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { Chat, Tool, Toolkit } from "@effect/ai";
@@ -14,11 +16,7 @@ import {
 } from "@effect/ai-openrouter";
 import { RedditService } from "./src/services/RedditService";
 
-const PhoneNumber = Schema.String.pipe(Schema.brand("PhoneNumber"));
-const WebhookPayload = Schema.Struct({
-  phone: PhoneNumber,
-  query: Schema.String,
-});
+const WebhookPayload = Schema.Struct({ query: Schema.String });
 
 const GetRedditPostBody = Tool.make("get_reddit_post", {
   description: "Get the contents of a reddit post",
@@ -96,11 +94,21 @@ User query: ${userQuery}`;
   ).pipe(Effect.catchAll(() => Effect.dieMessage("Agent error occurred")));
 
 const WebhookHandler = Effect.gen(function* () {
+  yield* Effect.logInfo("Receiving message");
+
   const request = yield* HttpServerRequest.HttpServerRequest;
+  const webhookSecret = yield* Config.redacted("WEBHOOK_SECRET");
+  const responseUrl = yield* Config.url("SMS_RESPONSE_URL");
 
   if (request.method !== "POST") {
     return yield* HttpServerResponse.text("Method not allowed", {
       status: 405,
+    });
+  }
+
+  if (!request.url.includes(Redacted.value(webhookSecret))) {
+    return yield* HttpServerResponse.text("Unauthorized", {
+      status: 401,
     });
   }
 
@@ -111,21 +119,27 @@ const WebhookHandler = Effect.gen(function* () {
   );
 
   const decoded = yield* Schema.decodeUnknown(WebhookPayload)(body).pipe(
-    Effect.catchTag("ParseError", () =>
-      Effect.dieMessage("Failed to parse JSON"),
+    Effect.catchTag("ParseError", (error) =>
+      Effect.dieMessage("Failed to parse JSON" + error.message),
     ),
   );
 
-  yield* Effect.logInfo(
-    `Received SMS request from ${decoded.phone}: ${decoded.query}`,
-  );
+  yield* Effect.logInfo(`Received SMS request from  ${decoded.query}`);
 
   const response = yield* disasterAgent(decoded.query);
 
   yield* Effect.logInfo(`Agent completed`);
 
+  // TODO: need to break down into multiple messages
+  yield* HttpClientRequest.make("GET")(responseUrl).pipe(
+    HttpClientRequest.appendUrlParam("value1", response.text),
+    HttpClient.execute,
+  );
+
+  yield* Effect.logInfo("Response SMS sent");
+
   return yield* HttpServerResponse.text(`Response: ${response.text}`);
-});
+}).pipe(Effect.tapErrorCause(Effect.logError));
 
 // Layer: OpenRouterClient depends on HttpClient and gets API key from Config
 const openRouterClientLayer = OpenRouterClient.layerConfig({
@@ -141,6 +155,7 @@ const openRouterLanguageModelLayer = OpenRouterLanguageModel.layer({
 const appLayer = Layer.mergeAll(
   toolHandlersLayer,
   openRouterLanguageModelLayer,
+  FetchHttpClient.layer,
 );
 
 // Provide dependencies to webhook handler for Bun export
