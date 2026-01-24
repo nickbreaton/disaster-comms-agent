@@ -33,3 +33,24 @@ This application allows users to SMS a question and receive a summarized answer 
 - AI-driven summarization to fit SMS constraints (~160 characters or multi-message segments)
 - Focus on actionable, time-sensitive information
 - Handle multiple concurrent SMS requests
+
+## Development Rules
+
+### Package Management
+**Only use `bun` for all package operations.** This is a Bun-only project.
+
+- **Install packages:** `bun add <package>` or `bun install`
+- **Never use npm:** Do not run `npm install` or `npm add`
+- **No package-lock.json:** Delete if it exists - Bun uses bun.lockb
+- **Running scripts:** Use `bun run` or `bun <script>` directly
+
+**Example:**
+```sh
+# Correct
+bun add @effect/ai-openrouter
+bun install
+
+# Incorrect - never run
+npm install
+npm add <package>
+```

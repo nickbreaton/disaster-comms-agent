@@ -1,97 +1,127 @@
-import { Effect, Schema, Layer, Redacted } from "effect"
-import { HttpServer, HttpServerRequest, HttpServerResponse, HttpApp, HttpClient } from "@effect/platform"
-import { BunHttpServer, BunRuntime } from "@effect/platform-bun"
-import { LanguageModel, Tool, Toolkit } from "@effect/ai"
-import { OpenAiLanguageModel, OpenAiClient } from "@effect/ai-openai"
+import { Effect, Schema, Layer, Config } from "effect";
+import {
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+  HttpApp,
+  FetchHttpClient,
+} from "@effect/platform";
+import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
+import { LanguageModel, Tool, Toolkit } from "@effect/ai";
+import {
+  OpenRouterLanguageModel,
+  OpenRouterClient,
+} from "@effect/ai-openrouter";
 
-const PhoneNumber = Schema.String.pipe(Schema.brand("PhoneNumber"))
+const PhoneNumber = Schema.String.pipe(Schema.brand("PhoneNumber"));
 const WebhookPayload = Schema.Struct({
   phone: PhoneNumber,
-  query: Schema.String
-})
+  query: Schema.String,
+});
 
-const SearchMegathread = Tool.make("SearchMegathread", {
-  description: "Search r/asheville subreddit megathreads for disaster-related information",
+const SearchMegathread = Tool.make("search_megathread", {
+  description:
+    "Search r/asheville subreddit megathreads for disaster-related information",
   parameters: {
-    query: Schema.String.annotations({ description: "Search query for finding relevant posts" })
+    query: Schema.String.annotations({
+      description: "Search query for finding relevant posts",
+    }),
   },
-  success: Schema.String
-})
+  success: Schema.String,
+});
 
-const SummarizeForSMS = Tool.make("SummarizeForSMS", {
-  description: "Summarize findings into SMS-friendly format (max 160 chars, urgent actionable info only)",
+const SummarizeForSMS = Tool.make("summarize_for_sms", {
+  description:
+    "Summarize findings into SMS-friendly format (max 160 chars, urgent actionable info only)",
   parameters: {
-    findings: Schema.String.annotations({ description: "Findings to summarize" })
+    findings: Schema.String.annotations({
+      description: "Findings to summarize",
+    }),
   },
-  success: Schema.String
-})
+  success: Schema.String,
+});
 
-const toolkit = Toolkit.make(SearchMegathread, SummarizeForSMS)
+const toolkit = Toolkit.make(SearchMegathread, SummarizeForSMS);
 const toolHandlersLayer = toolkit.toLayer({
   SearchMegathread: () => Effect.succeed("[]"),
-  SummarizeForSMS: () => Effect.succeed("No summary")
-})
+  SummarizeForSMS: () => Effect.succeed("No summary"),
+});
 
-const disasterAgent = (userQuery: string) => LanguageModel.generateText({
-  prompt: `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
+const disasterAgent = (userQuery: string) =>
+  LanguageModel.generateText({
+    prompt: `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
 
 User query: ${userQuery}`,
-  toolkit
-}).pipe(
-  Effect.map((r) => r.text),
-  Effect.catchAll(() => Effect.succeed("Agent error occurred"))
-)
+    toolkit,
+  }).pipe(
+    Effect.map((r) => r.text),
+    Effect.catchAll(() => Effect.dieMessage("Agent error occurred")),
+  );
 
-const WebhookHandler = Effect.gen(function*() {
-  const request = yield* HttpServerRequest.HttpServerRequest
+const WebhookHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
 
   if (request.method !== "POST") {
-    return yield* HttpServerResponse.text("Method not allowed", { status: 405 })
+    return yield* HttpServerResponse.text("Method not allowed", {
+      status: 405,
+    });
   }
 
   const body = yield* request.json.pipe(
-    Effect.orElse(() => Effect.succeed({ phone: "", query: "" }))
-  )
+    Effect.catchTag("RequestError", () =>
+      Effect.dieMessage("Failed to decode request"),
+    ),
+  );
 
   const decoded = yield* Schema.decodeUnknown(WebhookPayload)(body).pipe(
-    Effect.orElse(() => Effect.succeed({ phone: "unknown", query: (body as any).query ?? "" }))
-  )
+    Effect.catchTag("ParseError", () =>
+      Effect.dieMessage("Failed to parse JSON"),
+    ),
+  );
 
-  yield* Effect.logInfo(`Received SMS request from ${decoded.phone}: ${decoded.query}`)
+  yield* Effect.logInfo(
+    `Received SMS request from ${decoded.phone}: ${decoded.query}`,
+  );
 
-  const response = yield* disasterAgent(decoded.query)
+  const response = yield* disasterAgent(decoded.query);
 
-  yield* Effect.logInfo(`Agent completed`)
+  yield* Effect.logInfo(`Agent completed`);
 
-  return yield* HttpServerResponse.text(`Response: ${response}`)
-})
+  return yield* HttpServerResponse.text(`Response: ${response}`);
+});
 
-const handler = HttpApp.toWebHandler(WebhookHandler)
+// Layer: OpenRouterClient depends on HttpClient and gets API key from Config
+const openRouterClientLayer = OpenRouterClient.layerConfig({
+  apiKey: Config.redacted("OPENROUTER_API_KEY"),
+}).pipe(Layer.provide(FetchHttpClient.layer));
 
-export default handler
-export { handler }
+// Layer: OpenRouterLanguageModel depends on OpenRouterClient
+const openRouterLanguageModelLayer = OpenRouterLanguageModel.layer({
+  model: "anthropic/claude-4.5-sonnet",
+}).pipe(Layer.provide(openRouterClientLayer));
 
-const openAiClientLayer = OpenAiClient.layer({
-  apiKey: Redacted.make("sk-test-key")
-})
-
-const openAiLanguageModelLayer = OpenAiLanguageModel.layer({
-  model: "gpt-4o",
-  config: {}
-})
-
-const platformLayer = Layer.mergeAll(
-  BunHttpServer.layer({ port: 3000 }),
-  HttpClient.layer,
-  openAiClientLayer,
+// Combined layer for the webhook handler
+const appLayer = Layer.mergeAll(
   toolHandlersLayer,
-  openAiLanguageModelLayer
-)
+  openRouterLanguageModelLayer,
+);
+
+// Provide dependencies to webhook handler for Bun export
+const WebhookHandlerWithDeps = WebhookHandler.pipe(Effect.provide(appLayer));
+const handler = HttpApp.toWebHandler(WebhookHandlerWithDeps);
+
+export default handler;
+export { handler };
+
+// Server layer for standalone execution
+const serverLayer = HttpServer.serve(WebhookHandlerWithDeps).pipe(
+  Layer.provide(BunHttpServer.layer({ port: 3000 })),
+);
 
 if (import.meta.main) {
-  BunRuntime.runMain(Effect.logInfo("Server started on port 3000").pipe(
-    Effect.flatMap(() => Layer.launch(HttpServer.serve(WebhookHandler).pipe(
-      Layer.provide(platformLayer)
-    )))
-  ))
+  BunRuntime.runMain(
+    Effect.logInfo("Server started on port 3000").pipe(
+      Effect.flatMap(() => Layer.launch(serverLayer)),
+    ),
+  );
 }
