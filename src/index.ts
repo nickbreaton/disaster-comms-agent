@@ -14,7 +14,7 @@ import {
   OpenRouterLanguageModel,
   OpenRouterClient,
 } from "@effect/ai-openrouter";
-import { RedditService } from "./src/services/RedditService";
+import { RedditService } from "./services/RedditService";
 
 const WebhookPayload = Schema.Struct({ query: Schema.String });
 
