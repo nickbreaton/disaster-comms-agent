@@ -1,19 +1,18 @@
-import { Effect, Schema, Layer, Config, Option } from "effect";
+import { Effect, Schema, Layer, Config } from "effect";
 import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
   HttpApp,
   FetchHttpClient,
-  HttpClient,
 } from "@effect/platform";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
-import { Chat, LanguageModel, Tool, Toolkit, McpSchema } from "@effect/ai";
+import { Chat, Tool, Toolkit } from "@effect/ai";
 import {
   OpenRouterLanguageModel,
   OpenRouterClient,
 } from "@effect/ai-openrouter";
-import { RedditResponse } from "./src/schema/reddit";
+import { RedditService } from "./src/services/RedditService";
 
 const PhoneNumber = Schema.String.pipe(Schema.brand("PhoneNumber"));
 const WebhookPayload = Schema.Struct({
@@ -36,39 +35,14 @@ const toolkit = Toolkit.make(GetRedditPostBody);
 const toolHandlersLayer = toolkit
   .toLayer(
     Effect.gen(function* () {
-      const http = yield* HttpClient.HttpClient;
-      // const response = yield* http.get(url);
-      // return response.body;
+      const reddit = yield* RedditService;
 
       return toolkit.of({
-        get_reddit_post: ({ url }) =>
-          Effect.gen(function* () {
-            yield* Effect.logInfo("Toolcall: get_reddit_post").pipe(
-              Effect.annotateLogs({ url }),
-            );
-
-            if (!url.endsWith(".json")) {
-              url += "/.json?sort=new";
-            }
-
-            const res = yield* http.get(url, {
-              acceptJson: true,
-              headers: {
-                "User-Agent":
-                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-              },
-            });
-            const json = yield* res.json;
-            const decoded = yield* Schema.decodeUnknown(RedditResponse)(json);
-            return JSON.stringify(decoded);
-          }).pipe(
-            Effect.tapError((error) => Effect.logError(error.cause)),
-            Effect.orElse(() => Effect.succeed("Failed to get reddit post")),
-          ),
+        get_reddit_post: ({ url }) => reddit.getPost(url),
       });
     }),
   )
-  .pipe(Layer.provide(FetchHttpClient.layer));
+  .pipe(Layer.provide(RedditService.Default));
 
 const LATEST_MEGATHREAD =
   "https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread";
@@ -77,7 +51,7 @@ const disasterAgent = (userQuery: string) =>
   Effect.scoped(
     Effect.gen(function* () {
       const chat = yield* Chat.empty;
-      const maxTurns = 6;
+      const maxTurns = 10;
       const initialPrompt = `You are an emergency SMS assistant for  disasters. Answer the user's question using ONLY information found in the provided megathreads.
 
 Start with the latest megathread: ${LATEST_MEGATHREAD}
