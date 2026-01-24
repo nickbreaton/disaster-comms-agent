@@ -54,3 +54,7 @@ bun install
 npm install
 npm add <package>
 ```
+
+### Effect
+
+This codebase uses Effect heavily, if modifying code read any Effect skills you have.
