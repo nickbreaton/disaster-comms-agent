@@ -21,8 +21,8 @@ const WebhookPayload = Schema.Struct({
   query: Schema.String,
 });
 
-const GetRedditPostBody = Tool.make("get_reddit_post_body", {
-  description: "Get the contents of a reddit post without comments",
+const GetRedditPostBody = Tool.make("get_reddit_post", {
+  description: "Get the contents of a reddit post",
   parameters: {
     url: Schema.String.annotations({
       description:
@@ -41,14 +41,14 @@ const toolHandlersLayer = toolkit
       // return response.body;
 
       return toolkit.of({
-        get_reddit_post_body: ({ url }) =>
+        get_reddit_post: ({ url }) =>
           Effect.gen(function* () {
-            yield* Effect.logInfo("Toolcall: get_reddit_post_body").pipe(
+            yield* Effect.logInfo("Toolcall: get_reddit_post").pipe(
               Effect.annotateLogs({ url }),
             );
 
             if (!url.endsWith(".json")) {
-              url += "/.json";
+              url += "/.json?sort=new";
             }
 
             const res = yield* http.get(url, {
@@ -60,24 +60,9 @@ const toolHandlersLayer = toolkit
             });
             const json = yield* res.json;
             const decoded = yield* Schema.decodeUnknown(RedditResponse)(json);
-
-            const postText = yield* Option.fromNullable(
-              (() => {
-                for (const child of decoded) {
-                  for (const grandchild of child.data?.children ?? []) {
-                    if (grandchild.kind === "t3") {
-                      return grandchild.data?.selftext;
-                    }
-                  }
-                }
-              })(),
-            );
-
-            const selfText = yield* Option.fromNullable(postText);
-
-            return selfText;
+            return JSON.stringify(decoded);
           }).pipe(
-            Effect.tapError((error) => Effect.log(error.message)),
+            Effect.tapError((error) => Effect.logError(error.cause)),
             Effect.orElse(() => Effect.succeed("Failed to get reddit post")),
           ),
       });
@@ -93,7 +78,7 @@ const disasterAgent = (userQuery: string) =>
       const initialPrompt = `You help people find critical disaster information from r/asheville megathreads. Use tools to search for information and summarize only urgent, actionable info suitable for SMS (road closures, shelters, emergency services, supplies).
 
 - Here's the latest megathread: https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread
-- If this links to more up to date mega thread, follow that and so on. Crawl through the subreddit as needed.
+- Dates are included in the provided information, prefer newest information first
 
 VERY IMPORTANT: You MUST provide the most helpful possible response to the user based on the information you can find. Search as long as needed,
 summaraize the response which can fit into a SMS message or two. Condense the information as much as possible. Do not include any additional metadata.
@@ -153,11 +138,7 @@ const WebhookHandler = Effect.gen(function* () {
 
   const response = yield* disasterAgent(decoded.query);
 
-  yield* Effect.logInfo(
-    `Agent completed`,
-    response.finishReason,
-    response.text,
-  );
+  yield* Effect.logInfo(`Agent completed`);
 
   return yield* HttpServerResponse.text(`Response: ${response.text}`);
 });
