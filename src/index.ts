@@ -1,4 +1,11 @@
-import { Effect, Schema, Layer, Config, Redacted } from "effect";
+import {
+  Effect,
+  Schema,
+  Layer,
+  Config,
+  Redacted,
+  ConfigProvider,
+} from "effect";
 import {
   HttpServer,
   HttpServerRequest,
@@ -161,7 +168,15 @@ const appLayer = Layer.mergeAll(
 export const WebhookHandlerWithDeps = WebhookHandler.pipe(
   Effect.provide(appLayer),
 );
-const handler = HttpApp.toWebHandler(WebhookHandlerWithDeps);
 
-export default handler;
-export { handler };
+export default {
+  async fetch(request: Request, env: Record<string, string>) {
+    const configLayer = Layer.setConfigProvider(ConfigProvider.fromJson(env));
+
+    const handler = HttpApp.toWebHandler(
+      WebhookHandlerWithDeps.pipe(Effect.provide(configLayer)),
+    );
+
+    return handler(request);
+  },
+};
