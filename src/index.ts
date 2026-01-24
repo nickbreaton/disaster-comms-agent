@@ -12,6 +12,7 @@ import {
   HttpServerResponse,
   HttpApp,
   FetchHttpClient,
+  HttpClient,
 } from "@effect/platform";
 import { Chat, Tool, Toolkit } from "@effect/ai";
 import {
@@ -20,6 +21,7 @@ import {
 } from "@effect/ai-openrouter";
 import { RedditService } from "./services/RedditService";
 import { SmsSender } from "./services/SmsSender";
+import { SmsSendState } from "./services/SmsSendState";
 
 const WebhookPayload = Schema.Struct({ query: Schema.String });
 
@@ -34,18 +36,56 @@ const GetRedditPostBody = Tool.make("get_reddit_post", {
   success: Schema.String,
 });
 
-const toolkit = Toolkit.make(GetRedditPostBody);
+const SmsMessage = Schema.String.pipe(Schema.maxLength(154));
+
+const SendSmsMessages = Tool.make("send_sms", {
+  description: "Send one or more SMS response messages",
+  parameters: {
+    messages: Schema.Array(SmsMessage).pipe(Schema.maxItems(9)).annotations({
+      description: "Up to 9 SMS message bodies, each max 154 characters",
+    }),
+  },
+  success: Schema.Struct({ sent: Schema.Number }),
+});
+
+const toolkit = Toolkit.make(GetRedditPostBody, SendSmsMessages);
 const toolHandlersLayer = toolkit
   .toLayer(
     Effect.gen(function* () {
       const reddit = yield* RedditService;
+      const smsSender = yield* SmsSender;
+      const smsSendState = yield* SmsSendState;
+      const httpClient = yield* HttpClient.HttpClient;
 
       return toolkit.of({
         get_reddit_post: ({ url }) => reddit.getPost(url),
+        send_sms: ({ messages }) =>
+          Effect.gen(function* () {
+            const total = messages.length;
+            let index = 0;
+
+            for (const message of messages) {
+              index += 1;
+              yield* smsSender.send(`${message} (${index}/${total})`).pipe(
+                Effect.provideService(HttpClient.HttpClient, httpClient),
+                Effect.catchAll((error) =>
+                  Effect.logError(error).pipe(Effect.asVoid),
+                ),
+              );
+            }
+
+            yield* smsSendState.markSent();
+
+            return { sent: total };
+          }),
       });
     }),
   )
-  .pipe(Layer.provide(RedditService.Default));
+  .pipe(
+    Layer.provide(RedditService.Default),
+    Layer.provide(SmsSender.Default),
+    Layer.provide(FetchHttpClient.layer),
+  );
 
 const LATEST_MEGATHREAD =
   "https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread";
@@ -53,7 +93,10 @@ const LATEST_MEGATHREAD =
 const disasterAgent = (userQuery: string) =>
   Effect.scoped(
     Effect.gen(function* () {
+      yield* Effect.log("Agent starting");
+
       const chat = yield* Chat.empty;
+      const smsSendState = yield* SmsSendState;
       const maxTurns = 10;
       const initialPrompt = `You are an emergency SMS assistant for  disasters. Answer the user's question using ONLY information found in the provided megathreads.
 
@@ -64,6 +107,8 @@ Tooling:
 - Use get_reddit_post to fetch megathread JSON.
 - Read post body and the newest comments for actionable updates.
 - Keep searching until you can answer or there is no relevant info.
+- When you have the final SMS-ready response, call send_sms with an array of message bodies. Each message must be 154 characters or less, and you may send up to 9 messages. Do not add numbering; it will be appended automatically.
+- After calling send_sms, stop.
 
 Output requirements:
 - Return the most critical, actionable facts first (road closures, shelters, power, water, medical, supplies, emergency services).
@@ -81,6 +126,10 @@ User query: ${userQuery}`;
         toolkit,
       });
 
+      if (yield* smsSendState.isSent()) {
+        return response;
+      }
+
       while (response.finishReason === "tool-calls" && turn < maxTurns) {
         turn += 1;
         response = yield* chat.generateText({
@@ -88,6 +137,10 @@ User query: ${userQuery}`;
             "Continue and respond directly to the user with the final SMS-ready answer.",
           toolkit,
         });
+
+        if (yield* smsSendState.isSent()) {
+          return response;
+        }
       }
 
       if (response.finishReason === "tool-calls" && turn >= maxTurns) {
@@ -103,7 +156,6 @@ const WebhookHandler = Effect.gen(function* () {
 
   const request = yield* HttpServerRequest.HttpServerRequest;
   const webhookSecret = yield* Config.redacted("WEBHOOK_SECRET");
-  const smsSender = yield* SmsSender;
 
   if (!request.url.includes(Redacted.value(webhookSecret))) {
     return yield* HttpServerResponse.text("Unauthorized", {
@@ -135,10 +187,11 @@ const WebhookHandler = Effect.gen(function* () {
 
   yield* Effect.logInfo(`Agent completed`);
 
-  // TODO: need to break down into multiple messages
-  yield* smsSender.send(response.text);
+  const responseText = response.text.trim();
+  const httpResponseText =
+    responseText.length > 0 ? `Response: ${responseText}` : "Response sent";
 
-  return yield* HttpServerResponse.text(`Response: ${response.text}`);
+  return yield* HttpServerResponse.text(httpResponseText);
 }).pipe(Effect.tapErrorCause(Effect.logError));
 
 // Layer: OpenRouterClient depends on HttpClient and gets API key from Config
@@ -155,7 +208,6 @@ const openRouterLanguageModelLayer = OpenRouterLanguageModel.layer({
 const appLayer = Layer.mergeAll(
   toolHandlersLayer,
   openRouterLanguageModelLayer,
-  SmsSender.Default,
   FetchHttpClient.layer,
 );
 
@@ -167,9 +219,10 @@ export const WebhookHandlerWithDeps = WebhookHandler.pipe(
 export default {
   async fetch(request: Request, env: Record<string, string>) {
     const configLayer = Layer.setConfigProvider(ConfigProvider.fromJson(env));
+    const requestLayer = Layer.mergeAll(configLayer, SmsSendState.Default);
 
     const handler = HttpApp.toWebHandler(
-      WebhookHandlerWithDeps.pipe(Effect.provide(configLayer)),
+      WebhookHandlerWithDeps.pipe(Effect.provide(requestLayer)),
     );
 
     return handler(request);
