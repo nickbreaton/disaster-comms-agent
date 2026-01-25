@@ -29,7 +29,7 @@ const GetRedditPostBody = Tool.make("get_reddit_post", {
   parameters: {
     url: Schema.String.annotations({
       description:
-        "Full URL of the reddit post (i.e. https://www.reddit.com/r/{{subreddit}}/)",
+        "Full URL of the reddit post: https://www.reddit.com/r/(subreddit)/(comment_id)/[post_description]). Query parameters or additional path segments not accepted.",
     }),
   },
   success: Schema.String,
@@ -129,7 +129,7 @@ User query: ${userQuery}`;
       });
 
       if (response.toolResults.some((result) => result.name === "send_sms")) {
-        return response;
+        return;
       }
     }
 
@@ -137,7 +137,7 @@ User query: ${userQuery}`;
       yield* Effect.logWarning("Tool-call loop hit max turns");
     }
 
-    return response;
+    return;
   }).pipe(
     Effect.scoped,
     Effect.catchAll(() => Effect.dieMessage("Agent error occurred")),
@@ -173,17 +173,13 @@ const WebhookHandler = Effect.gen(function* () {
     ),
   );
 
-  yield* Effect.logInfo(`Received SMS request from  ${decoded.query}`);
-
-  const response = yield* disasterAgent(decoded.query);
-
+  yield* Effect.logInfo(
+    `Received SMS request ${JSON.stringify(decoded.query)}`,
+  );
+  yield* disasterAgent(decoded.query);
   yield* Effect.logInfo(`Agent completed`);
 
-  const responseText = response.text.trim();
-  const httpResponseText =
-    responseText.length > 0 ? `Response: ${responseText}` : "Response sent";
-
-  return yield* HttpServerResponse.text(httpResponseText);
+  return yield* HttpServerResponse.text("Ok");
 }).pipe(Effect.tapErrorCause(Effect.logError));
 
 // Layer: OpenRouterClient depends on HttpClient and gets API key from Config
