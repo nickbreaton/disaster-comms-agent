@@ -103,6 +103,7 @@ const toolHandlersLayer = toolkit
     Layer.provide(FetchHttpClient.layer),
   );
 
+// TODO: Provide the agent with the current pinned posts for a given subreddit, let it pick which to use
 const LATEST_MEGATHREAD =
   "https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread";
 
