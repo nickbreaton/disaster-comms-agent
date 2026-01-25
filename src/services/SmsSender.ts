@@ -27,7 +27,7 @@ export class SmsSender extends Effect.Service<SmsSender>()(
     dependencies: [FetchHttpClient.layer],
   },
 ) {
-  static Local = Layer.succeed(
+  static DryRun = Layer.succeed(
     SmsSender,
     SmsSender.make({
       send: (message) => Effect.logInfo(`Sent SMS: ${JSON.stringify(message)}`),

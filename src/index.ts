@@ -5,6 +5,7 @@ import {
   Config,
   Redacted,
   ConfigProvider,
+  Option,
 } from "effect";
 import {
   HttpServerRequest,
@@ -12,6 +13,7 @@ import {
   HttpApp,
   FetchHttpClient,
   HttpClient,
+  Headers,
 } from "@effect/platform";
 import { Chat, Tool, Toolkit } from "@effect/ai";
 import {
@@ -62,6 +64,7 @@ const SendSmsMessages = Tool.make("send_sms", {
       }),
   },
   success: Schema.Struct({ sent: Schema.Number }),
+  dependencies: [SmsSender],
 });
 
 const toolkit = Toolkit.make(GetRedditPostBody, SendSmsMessages);
@@ -69,13 +72,13 @@ const toolHandlersLayer = toolkit
   .toLayer(
     Effect.gen(function* () {
       const reddit = yield* RedditService;
-      const smsSender = yield* SmsSender;
       const httpClient = yield* HttpClient.HttpClient;
 
       return toolkit.of({
         get_reddit_post: ({ url }) => reddit.getPost(url),
         send_sms: ({ messages }) =>
           Effect.gen(function* () {
+            const smsSender = yield* SmsSender;
             const total = messages.length;
             let index = 0;
 
@@ -97,7 +100,6 @@ const toolHandlersLayer = toolkit
   )
   .pipe(
     Layer.provide(RedditService.Default),
-    Layer.provide(SmsSender.Default),
     Layer.provide(FetchHttpClient.layer),
   );
 
@@ -192,7 +194,14 @@ const WebhookHandler = Effect.gen(function* () {
     `Received SMS request ${JSON.stringify(decoded.query)}`,
   );
 
+  const dryRunHeader = Headers.get(request.headers, "Dry-Run");
+  const smsSenderLayer =
+    Option.getOrElse(dryRunHeader, () => "false") === "true"
+      ? SmsSender.DryRun
+      : SmsSender.Default;
+
   yield* disasterAgent(decoded.query).pipe(
+    Effect.provide(smsSenderLayer),
     Effect.retry({ times: 2 }), // Risk of sending SMS thrice, but better than not at all
     Effect.mapError((error) => new AgentError({ message: String(error) })),
   );
