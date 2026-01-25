@@ -1,5 +1,9 @@
-import { Config, Effect } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform";
+import { Config, Effect, Layer } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+} from "@effect/platform";
 
 export class SmsSender extends Effect.Service<SmsSender>()(
   "@services/SmsSender",
@@ -22,4 +26,11 @@ export class SmsSender extends Effect.Service<SmsSender>()(
     }),
     dependencies: [FetchHttpClient.layer],
   },
-) {}
+) {
+  static Local = Layer.succeed(
+    SmsSender,
+    SmsSender.make({
+      send: (message) => Effect.logInfo(`Sent SMS: ${JSON.stringify(message)}`),
+    }),
+  );
+}
