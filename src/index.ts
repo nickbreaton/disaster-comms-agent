@@ -179,7 +179,11 @@ const WebhookHandler = Effect.gen(function* () {
   yield* Effect.logInfo(
     `Received SMS request ${JSON.stringify(decoded.query)}`,
   );
-  yield* disasterAgent(decoded.query);
+
+  yield* disasterAgent(decoded.query).pipe(
+    Effect.retry({ times: 2 }), // Risk of sending SMS thrice, but better than not at all
+  );
+
   yield* Effect.logInfo(`Agent completed`);
 
   return yield* HttpServerResponse.text("Ok");
