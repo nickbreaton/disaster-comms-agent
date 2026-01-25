@@ -35,14 +35,17 @@ const GetRedditPostBody = Tool.make("get_reddit_post", {
   success: Schema.String,
 });
 
-const SmsMessage = Schema.String.pipe(Schema.maxLength(135));
+const SmsMessageMaxLength = 125;
+const SmsMessage = Schema.String.pipe(Schema.maxLength(SmsMessageMaxLength));
 
 const SendSmsMessages = Tool.make("send_sms", {
   description: "Send one or more SMS response messages",
   parameters: {
-    messages: Schema.Array(SmsMessage).pipe(Schema.maxItems(9)).annotations({
-      description: "Up to 9 SMS message bodies, each max 135 characters",
-    }),
+    messages: Schema.Array(SmsMessage)
+      .pipe(Schema.maxItems(9))
+      .annotations({
+        description: `Up to 9 SMS message bodies, each max ${SmsMessageMaxLength} characters`,
+      }),
   },
   success: Schema.Struct({ sent: Schema.Number }),
 });
@@ -102,7 +105,7 @@ Tooling:
 - Use get_reddit_post to fetch megathread JSON.
 - Read post body and the newest comments for actionable updates.
 - Keep searching until you can answer or there is no relevant info.
-- When you have the final SMS-ready response, call send_sms with an array of message bodies. Each message must be 135 characters or less, and you may send up to 9 messages. Do not add numbering; it will be appended automatically.
+- When you have the final SMS-ready response, call send_sms with an array of message bodies. Each message must be ${SmsMessageMaxLength} characters or less, and you may send up to 9 messages. Do not add numbering; it will be appended automatically.
 - After calling send_sms, stop.
 
 Output requirements:
