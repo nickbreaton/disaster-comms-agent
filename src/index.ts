@@ -21,7 +21,6 @@ import {
 } from "@effect/ai-openrouter";
 import { RedditService } from "./services/RedditService";
 import { SmsSender } from "./services/SmsSender";
-import { SmsSendState } from "./services/SmsSendState";
 
 const WebhookPayload = Schema.Struct({ query: Schema.String });
 
@@ -54,7 +53,6 @@ const toolHandlersLayer = toolkit
     Effect.gen(function* () {
       const reddit = yield* RedditService;
       const smsSender = yield* SmsSender;
-      const smsSendState = yield* SmsSendState;
       const httpClient = yield* HttpClient.HttpClient;
 
       return toolkit.of({
@@ -74,8 +72,6 @@ const toolHandlersLayer = toolkit
               );
             }
 
-            yield* smsSendState.markSent();
-
             return { sent: total };
           }),
       });
@@ -91,14 +87,12 @@ const LATEST_MEGATHREAD =
   "https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread";
 
 const disasterAgent = (userQuery: string) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      yield* Effect.log("Agent starting");
+  Effect.gen(function* () {
+    yield* Effect.log("Agent starting");
 
-      const chat = yield* Chat.empty;
-      const smsSendState = yield* SmsSendState;
-      const maxTurns = 10;
-      const initialPrompt = `You are an emergency SMS assistant for  disasters. Answer the user's question using ONLY information found in the provided megathreads.
+    const chat = yield* Chat.empty;
+    const maxTurns = 10;
+    const initialPrompt = `You are an emergency SMS assistant for  disasters. Answer the user's question using ONLY information found in the provided megathreads.
 
 Start with the latest megathread: ${LATEST_MEGATHREAD}
 If it links to a newer megathread, follow it and prefer the newest dated information.
@@ -120,36 +114,34 @@ Output requirements:
 
 User query: ${userQuery}`;
 
-      let turn = 1;
-      let response = yield* chat.generateText({
-        prompt: initialPrompt,
+    let turn = 1;
+    let response = yield* chat.generateText({
+      prompt: initialPrompt,
+      toolkit,
+    });
+
+    while (response.finishReason === "tool-calls" && turn < maxTurns) {
+      turn += 1;
+      response = yield* chat.generateText({
+        prompt:
+          "Continue and respond directly to the user with the final SMS-ready answer.",
         toolkit,
       });
 
-      if (yield* smsSendState.isSent()) {
+      if (response.toolResults.some((result) => result.name === "send_sms")) {
         return response;
       }
+    }
 
-      while (response.finishReason === "tool-calls" && turn < maxTurns) {
-        turn += 1;
-        response = yield* chat.generateText({
-          prompt:
-            "Continue and respond directly to the user with the final SMS-ready answer.",
-          toolkit,
-        });
+    if (response.finishReason === "tool-calls" && turn >= maxTurns) {
+      yield* Effect.logWarning("Tool-call loop hit max turns");
+    }
 
-        if (yield* smsSendState.isSent()) {
-          return response;
-        }
-      }
-
-      if (response.finishReason === "tool-calls" && turn >= maxTurns) {
-        yield* Effect.logWarning("Tool-call loop hit max turns");
-      }
-
-      return response;
-    }),
-  ).pipe(Effect.catchAll(() => Effect.dieMessage("Agent error occurred")));
+    return response;
+  }).pipe(
+    Effect.scoped,
+    Effect.catchAll(() => Effect.dieMessage("Agent error occurred")),
+  );
 
 const WebhookHandler = Effect.gen(function* () {
   yield* Effect.logInfo("Receiving message");
@@ -219,10 +211,9 @@ export const WebhookHandlerWithDeps = WebhookHandler.pipe(
 export default {
   async fetch(request: Request, env: Record<string, string>) {
     const configLayer = Layer.setConfigProvider(ConfigProvider.fromJson(env));
-    const requestLayer = Layer.mergeAll(configLayer, SmsSendState.Default);
 
     const handler = HttpApp.toWebHandler(
-      WebhookHandlerWithDeps.pipe(Effect.provide(requestLayer)),
+      WebhookHandlerWithDeps.pipe(Effect.provide(configLayer)),
     );
 
     return handler(request);
