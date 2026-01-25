@@ -7,7 +7,6 @@ import {
   ConfigProvider,
 } from "effect";
 import {
-  HttpServer,
   HttpServerRequest,
   HttpServerResponse,
   HttpApp,
