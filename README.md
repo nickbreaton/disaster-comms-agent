@@ -5,13 +5,11 @@ Hastily scrapped together agent to gather local information from Reddit and resp
 <br>
 <p align="center">
   <img 
-    src="https://github.com/user-attachments/assets/f8223464-92b8-4438-8c4d-161b2fe77b97" 
+    src="https://github.com/user-attachments/assets/205ad99c-6ad4-4fef-9e07-b426234f18e4" 
     width="350" 
-    alt="App screenshot showing a user‑initiated text message and a Disaster Comms Agent responding with a winter weather impact forecast."
+    alt="iMessage screenshot showing a user‑initiated text message and a Disaster Comms Agent responding with a winter weather impact forecast."
   >
 </p>
-
-
 
 
 
