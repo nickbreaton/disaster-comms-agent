@@ -1,6 +1,6 @@
 # Disaster Comms Agent
 
-Hastily scrapped together agent to gather local information from Reddit and responding via SMS; for use during natural disasters.
+Hastily scrapped together agent to gather local information from Reddit and respond via SMS; for use during natural disasters.
 
 <br>
 <p align="center">
