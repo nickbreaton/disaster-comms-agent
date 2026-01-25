@@ -18,10 +18,24 @@ import {
   OpenRouterLanguageModel,
   OpenRouterClient,
 } from "@effect/ai-openrouter";
-import { RedditService } from "./services/RedditService";
+import { RedditService, RedditServiceError } from "./services/RedditService";
 import { SmsSender } from "./services/SmsSender";
 
 const WebhookPayload = Schema.Struct({ query: Schema.String });
+
+class RequestDecodeError extends Schema.TaggedError<RequestDecodeError>()(
+  "RequestDecodeError",
+  { message: Schema.String },
+) {}
+
+class RequestParseError extends Schema.TaggedError<RequestParseError>()(
+  "RequestParseError",
+  { message: Schema.String },
+) {}
+
+class AgentError extends Schema.TaggedError<AgentError>()("AgentError", {
+  message: Schema.String,
+}) {}
 
 const GetRedditPostBody = Tool.make("get_reddit_post", {
   description: "Get the contents of a reddit post",
@@ -32,6 +46,7 @@ const GetRedditPostBody = Tool.make("get_reddit_post", {
     }),
   },
   success: Schema.String,
+  failure: RedditServiceError,
 });
 
 const SmsMessageMaxLength = 125;
@@ -141,10 +156,7 @@ User query: ${userQuery}`;
     }
 
     return;
-  }).pipe(
-    Effect.scoped,
-    Effect.catchAll(() => Effect.dieMessage("Agent error occurred")),
-  );
+  }).pipe(Effect.scoped);
 
 const WebhookHandler = Effect.gen(function* () {
   yield* Effect.logInfo("Receiving message");
@@ -165,14 +177,14 @@ const WebhookHandler = Effect.gen(function* () {
   }
 
   const body = yield* request.json.pipe(
-    Effect.catchTag("RequestError", () =>
-      Effect.dieMessage("Failed to decode request"),
+    Effect.mapError(
+      (error) => new RequestDecodeError({ message: String(error) }),
     ),
   );
 
   const decoded = yield* Schema.decodeUnknown(WebhookPayload)(body).pipe(
-    Effect.catchTag("ParseError", (error) =>
-      Effect.dieMessage("Failed to parse JSON" + error.message),
+    Effect.mapError(
+      (error) => new RequestParseError({ message: error.message }),
     ),
   );
 
@@ -182,12 +194,29 @@ const WebhookHandler = Effect.gen(function* () {
 
   yield* disasterAgent(decoded.query).pipe(
     Effect.retry({ times: 2 }), // Risk of sending SMS thrice, but better than not at all
+    Effect.mapError((error) => new AgentError({ message: String(error) })),
   );
 
   yield* Effect.logInfo(`Agent completed`);
 
   return yield* HttpServerResponse.text("Ok");
-}).pipe(Effect.tapErrorCause(Effect.logError));
+}).pipe(
+  Effect.catchTags({
+    RequestDecodeError: (error) =>
+      HttpServerResponse.text(error.message, {
+        status: 400,
+      }),
+    RequestParseError: (error) =>
+      HttpServerResponse.text(error.message, {
+        status: 400,
+      }),
+    AgentError: (error) =>
+      HttpServerResponse.text(error.message, {
+        status: 500,
+      }),
+  }),
+  Effect.tapErrorCause(Effect.logError),
+);
 
 // Layer: OpenRouterClient depends on HttpClient and gets API key from Config
 const openRouterClientLayer = OpenRouterClient.layerConfig({

@@ -2,6 +2,11 @@ import { Config, Effect, Option, Schema } from "effect";
 import { HttpClient, FetchHttpClient } from "@effect/platform";
 import { RedditResponse } from "../schema/reddit";
 
+export class RedditServiceError extends Schema.TaggedError<RedditServiceError>()(
+  "RedditServiceError",
+  { message: Schema.String, cause: Schema.Defect },
+) {}
+
 export class RedditService extends Effect.Service<RedditService>()(
   "@services/RedditService",
   {
@@ -34,8 +39,13 @@ export class RedditService extends Effect.Service<RedditService>()(
 
           return JSON.stringify(decoded);
         }).pipe(
-          Effect.tapError((error) => Effect.logError(error.cause)),
-          Effect.orElse(() => Effect.succeed("Failed to get reddit post")),
+          Effect.mapError(
+            (cause) =>
+              new RedditServiceError({
+                message: "Failed to get reddit post",
+                cause,
+              }),
+          ),
         );
 
       return { getPost };
