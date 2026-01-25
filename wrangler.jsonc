@@ -2,4 +2,10 @@
   "name": "disaster-comms-agent",
   "compatibility_date": "2026-01-24",
   "main": "src/index.ts",
+  "observability": {
+    "logs": {
+      "enabled": false,
+      "invocation_logs": true,
+    },
+  },
 }
