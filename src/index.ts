@@ -70,6 +70,7 @@ const toolHandlersLayer = toolkit
                   Effect.logError(error).pipe(Effect.asVoid),
                 ),
               );
+              yield* Effect.sleep(500);
             }
 
             return { sent: total };
