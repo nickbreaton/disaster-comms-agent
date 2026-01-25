@@ -4,9 +4,12 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun --watch src/dev.ts"
+    "dev": "bun --watch src/dev.ts",
+    "query": "bun run scripts/query.ts"
   },
   "devDependencies": {
+    "@effect/cli": "^0.73.1",
+    "@effect/platform-bun": "^0.87.1",
     "@types/bun": "latest"
   },
   "peerDependencies": {
@@ -14,10 +17,8 @@
   },
   "dependencies": {
     "@effect/ai": "^0.33.2",
-    "@effect/ai-openai": "^0.37.2",
     "@effect/ai-openrouter": "^0.8.1",
     "@effect/platform": "^0.94.2",
-    "@effect/platform-bun": "^0.87.1",
     "effect": "^3.19.15"
   }
 }
