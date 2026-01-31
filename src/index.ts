@@ -105,7 +105,7 @@ const toolHandlersLayer = toolkit
 
 // TODO: Provide the agent with the current pinned posts for a given subreddit, let it pick which to use
 const LATEST_MEGATHREAD =
-  "https://www.reddit.com/r/asheville/comments/1qjvkuh/jan_23_2026_wnc_weekend_winter_weather_megathread";
+  "https://www.reddit.com/r/asheville/comments/1qrmyqn/jan_2026_snow_storm_megathread/";
 
 const disasterAgent = (userQuery: string) =>
   Effect.gen(function* () {
